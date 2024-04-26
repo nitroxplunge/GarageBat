@@ -1,10 +1,3 @@
-// moving everything to a library
-
-//changing led iterating
-//read in row by row so its accessable like a grid?
-//need a way to 3x5 number at any point
-
-
 
 #include <Adafruit_NeoPixel.h>
 #include "images.cpp"
@@ -16,6 +9,9 @@
 #define PIN_BUTTON 33 //gpio 33 for button
 #define PIN_BUZZER_1 18
 #define PIN_BUZZER_2 19
+#define PWM1_Ch    0
+#define PWM1_Res   8
+#define PWM1_Freq  1000
 
 bool debug = true;
 bool serialControl = true;
@@ -25,13 +21,22 @@ Adafruit_NeoPixel NeoPixel(NUM_PIXELS, PIN_NEO_PIXEL, NEO_GRB + NEO_KHZ800);
 int image[4][5][25];  //row 0: image, row 1: R, row 2: G, row 3: B, row 4: dictionary
 int dictionary[125];
 long int startTime = 0;   //for controlling led blinks
-long int startTimeButton;   //tracking how long a button is pressed
+long int startTimeButton = 0;   //tracking how long a button is pressed
+long int startTimeBeep = 0;     //beep duration tracking
 bool buttonStates[2] = {false, false}; //tracking where the button was and where the button now is(the missile knows
 bool buttonState = false;
+bool longPressed = false;
 int blinkCount = 0;
 double hOffset = 0;
 double entranceAngle = 0;
 double sensorAngle = 0;
+int longPressTime = 500;     //how long a long press is
+int debounce = 40;    //how long a button has to be read before it counts as a press
+int pressType = 0;
+int tone = 150;   //beep sound
+int beeping = 0;    //which beep is currently happening
+int page = 0;     //which page of the menu we are on
+bool update = false;    //screen has an update to run
 
 //inches range 3-36
 //driveway angle -30 to 30
@@ -46,31 +51,105 @@ enum numberType {
   Base
 };
 
+numberType displayNumberType = Base;
+
 //basic LED RF control
 bool rf = false;    //desired LED state from rf - false is off
 bool signState = false;   //state of LEDs - false is off
 
-//function to build array of numbers for sign
-//work row by row and for each number off set by 4 then start next number
-//watch for array overflow
 
-void checkButton(long int &_startTimeButton, double _hOffset, int _delays[], int _debounce, bool _buttonState) {
-  if (digitalRead(PIN_BUTTON) && !_buttonState) {
-    _startTimeButton = millis();
-    _buttonState = true;
+
+void beep(int _type, long int &_startTimeBeep, int &_beeping, int _tone) {
+  if (_type == 1 && _beeping == 0) {  //short beep
+    ledcWrite(PWM1_Ch, _tone);
+    _beeping = _type;
+    _startTimeBeep = millis();
+  } else if (_type == 2 && _beeping == 0) {
+    ledcWrite(PWM1_Ch, _tone);
+    _beeping = _type;
+    _startTimeBeep = millis();
   }
 
-  if (!digitalRead(PIN_BUTTON)) {
+  if (_beeping == 1 && millis() - _startTimeBeep > 50) {
+    ledcWrite(PWM1_Ch, 0);
+    _beeping = 0;
+    _startTimeBeep = 0;
+  } else if (_beeping == 2 && millis() - _startTimeBeep > 150) {
+    ledcWrite(PWM1_Ch, 0);
+    _beeping = 0;
+    _startTimeBeep = 0;
+  }
+  
+  // if (_beeping == 0 && _startTimeBeep == 0) {
+  //   ledcWrite(PWM1_Ch, 0);
+  // }
+}
+
+//returns the current button press type 0 for off 1 for short 2 for long
+int checkButton(long int &_startTimeButton, int _longPressTime, int _debounce, bool &_buttonState, bool &_longPressed) {
+  if (!digitalRead(PIN_BUTTON) && !_buttonState) {
+    _startTimeButton = millis();
+    _buttonState = true;
+   // ledcWrite(PWM1_Ch, 0);
+  }
+  
+  if (digitalRead(PIN_BUTTON) && millis() - _startTimeButton > _debounce && millis() - _startTimeButton < _longPressTime && buttonState == true) {
     _buttonState = false;
-    if (millis() - _startTimeButton < _delays[0] && millis() - _startTimeButton > _debounce) {
-      
+    _startTimeButton = 0;
+   // ledcWrite(PWM1_Ch, 0);
+    return 1;
+  }
+
+  if (!digitalRead(PIN_BUTTON) && millis() - _startTimeButton > _longPressTime && _longPressed == false && _buttonState == true) {
+    _longPressed = true;
+    return 2;
+  }
+  if (digitalRead(PIN_BUTTON) && millis() - _startTimeButton >  _longPressTime && _longPressed == true) {
+    _buttonState = false;
+    _longPressed = false;
+    _startTimeButton = 0;
+    //ledcWrite(PWM1_Ch, 0);
+    //return 2;
+  }
+
+  return 0;
+}
+
+
+
+void menu(int _type, double &_hOffset, double &_entranceAngle, double &_sensorAngle, int &_page, bool &_update) {
+  if (_type == 2) {
+    _page++;
+    _update = true;
+    if (_page > 3) _page = 0;
+  }
+
+  if (_page == 1) { //inches input
+    if (_type == 1) {
+      _hOffset++;
+      if (_hOffset > 36) _hOffset = 0;
+      _update = true;
+    }
+  } else if (_page == 2) {
+    if (_type == 1) {
+      _entranceAngle++;
+      if (_entranceAngle > 30) _entranceAngle = -30;
+      _update = true;
+    }
+
+  } else if (_page == 3) {
+    int _calculatedAngle = 0;
+    //do calculation stuff
+    if (_sensorAngle != _calculatedAngle) {
+      _sensorAngle = 45;    // give the user the sensor angle they need
+      _update = true;
     }
   }
 }
 
 void printDouble( double val, unsigned int precision){
 // prints val with number of decimal places determine by precision
-// NOTE: precision is 1 followed by the number of zeros for the desired number of decimial places
+// NOTE: precision is 1 followed by the number of zeros for the desired number of decimal places
 // example: printDouble( 3.1415, 100); // prints 3.14 (two decimal places)
 
     Serial.print (int(val));  //prints the int part
@@ -257,7 +336,7 @@ for (int r = 0; r < _rows; r++) {
     }
   }
 //ones
-  if(ones > 0 || tens > 0 || hundreds > 0) {
+  if(ones >= 0 || tens > 0 || hundreds > 0) {
     for (int r = 0; r < _rows; r++) {
       for (int col = _startPositions[startIndexArray][2][0]; col < _startPositions[startIndexArray][2][1]; col++) {
         _image[0][r][col] = led_numbers[ones][r][col - _startPositions[startIndexArray][2][0]];  //r
@@ -466,8 +545,11 @@ void led_flash(int _count, int _firstImageTime, int _secondImageTime, int _preDe
 void setup() {
   NeoPixel.begin();  // initialize NeoPixel strip object (REQUIRED)
   pinMode(PIN_BUTTON, INPUT_PULLUP);
-  pinMode(PIN_BUZZER_1, OUTPUT);
-  pinMode(PIN_BUZZER_2, OUTPUT);
+  // pinMode(PIN_BUZZER_1, OUTPUT);
+  // pinMode(PIN_BUZZER_2, OUTPUT);
+
+  ledcAttachPin(PIN_BUZZER_1, PWM1_Ch);
+  ledcSetup(PWM1_Ch, PWM1_Freq, PWM1_Res);
 
   if (debug || serialControl) Serial.begin(9600);
   Serial.setTimeout(10);
@@ -494,17 +576,17 @@ void setup() {
   NeoPixel.show();  // update to the NeoPixel Led Strip
 
   if (debug) {
-    for (double d = -200; d < 200; d = d + 1) {
-      convertNumbers(image, d, 5, 25, In);
-      led_display(image, 5, 25, purple, blue);
-      delay(10);
-    }
+    // for (double d = -200; d < 200; d = d + 1) {
+    //   convertNumbers(image, d, 5, 25, In);
+    //   led_display(image, 5, 25, purple, blue);
+    //   delay(10);
+    // }
 
-    for (double d = -200; d < 200; d = d + 1) {
-      convertNumbers(image, d, 5, 25, Deg);
-      led_display(image, 5, 25, cyan, blue);
-      delay(10);
-    }
+    // for (double d = -200; d < 200; d = d + 1) {
+    //   convertNumbers(image, d, 5, 25, Deg);
+    //   led_display(image, 5, 25, cyan, blue);
+    //   delay(10);
+    // }
 
   }
 }
@@ -522,6 +604,41 @@ void loop() {
   // NeoPixel.clear();
   // NeoPixel.show();  // update to the NeoPixel Led Strip
   // delay(250);     
+
+  pressType = checkButton(startTimeButton, longPressTime, debounce, buttonState, longPressed);
+
+  menu(pressType, hOffset, entranceAngle, sensorAngle, page, update);
+  if (page == 1 || page == 2) beep(pressType, startTimeBeep, beeping, tone);
+
+  if(update) {
+    switch (page) {
+      case 1:
+        displayNumberType = In;
+        convertNumbers(image, hOffset, 5, 25, displayNumberType);
+        led_display(image, 5, 25, purple, blue);
+        update = false;
+        break;
+      case 2:
+        displayNumberType = Deg;
+        convertNumbers(image, entranceAngle, 5, 25, displayNumberType);
+        led_display(image, 5, 25, green, blue);
+        update = false;
+        break;
+      case 3:
+        displayNumberType = Deg;
+        convertNumbers(image, sensorAngle, 5, 25, displayNumberType);
+        led_display(image, 5, 25, yellow, blue);
+        update = false;
+        break;
+      default:
+        displayNumberType = Base;
+        convertNumbers(image, entranceAngle, 5, 25, displayNumberType);
+        led_display(image, 5, 25, off, off);
+        update = false;
+        break;
+    }
+
+  }
 
   if (serialControl) {
     if (Serial.available() > 0) {
@@ -541,6 +658,7 @@ void loop() {
 //basic LED RF control
   if (rf && !signState) {   //rf wants on, and sign is off
     signState = true;
+    page = 0;
     led_display(stop_image, 5, 25);
     //led_display(image, 5, 25, purple, blue);
     NeoPixel.show();  // update to the NeoPixel Led Strip
