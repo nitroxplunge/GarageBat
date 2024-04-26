@@ -1,4 +1,5 @@
 #include "painlessMesh.h"
+#include <Preferences.h>
 
 #define URECHO_LEFT  23        // PWM output 0-50000us, every 50us represent 1cm (blue)
 #define URTRIG_LEFT  22        // Trigger pin (green)
@@ -10,19 +11,29 @@
 
 #define NETWORK_RATE 10
 
-#define DIST_CUTOFF 794
-
 ///
 #define   MESH_PREFIX     "GarageBat"
 #define   MESH_PASSWORD   "garagePassword"
 #define   MESH_PORT       5555
 painlessMesh network;
 Scheduler sensorScheduler; // tasks control
-bool debug = false;
+bool debug = true;
 ///
 
-unsigned long timer = millis();
+unsigned long t = millis();
 String state;
+
+void leftSensorRead();
+void rightSensorRead();
+Task tl(100, TASK_FOREVER, &leftSensorRead);
+Task tr(100, TASK_FOREVER, &rightSensorRead);
+Scheduler runner;
+
+bool left_stop = false;
+bool right_stop = false;
+
+Preferences prefs;
+int dist_cutoff;
 
 void setup() {
   Serial.begin(115200);
@@ -43,52 +54,83 @@ void setup() {
   network.onNodeTimeAdjusted(&nodeTimeAdjustedCallback);  //runs when device updates it's time to match the network
   ///
 
+  prefs.begin("GarageBat");
+  dist_cutoff = prefs.getInt("dist_cutoff", 100); // default to 100
+
+  // prefs.putInt("counter", counter);
+
   delay(500); // Wait for initialization
   Serial.println("Sensors initialized");
+
+  runner.init();
+  runner.addTask(tl);
+  runner.addTask(tr);
+  tl.enable();
+  tr.enable();
 }
 
 void loop() {
-  delay(DELAY_INTERLACE);
+  runner.execute();
+  network.update();
+}
 
+void leftSensorRead() {
   // Take a reading by sending out a trigger pulse and reading the width of the response pulse
   digitalWrite(URTRIG_LEFT, LOW);
   delay(DELAY_TRIG);
   digitalWrite(URTRIG_LEFT, HIGH);
   unsigned long pulse_time_left = pulseIn(URECHO_LEFT, LOW);
   unsigned int dist_left = pulse_time_left > 50000 ? 0 : pulse_time_left / 50.0;
+  if (debug) Serial.printf("Left: %3dcm \n", dist_left);
+  left_stop = checkInRange(dist_left, dist_cutoff);
+  if (right_stop) {
+    checkAndSendNetworkBroadcast("stop");
+  } else {
+    checkAndSendNetworkBroadcast((left_stop ? "stop" : "clear"));
+  }
+}
 
-  checkAndSendNetworkBroadcast(checkInRange(dist_left, DIST_CUTOFF));
-
-  delay(DELAY_INTERLACE);
-
+void rightSensorRead() {
   // Take a reading by sending out a trigger pulse and reading the width of the response pulse
   digitalWrite(URTRIG_RIGHT, LOW);
   delay(DELAY_TRIG);
   digitalWrite(URTRIG_RIGHT, HIGH);
   unsigned long pulse_time_right = pulseIn(URECHO_RIGHT, LOW);
   unsigned int dist_right = pulse_time_right > 50000 ? 0 : pulse_time_right / 50.0;
-
-  checkAndSendNetworkBroadcast(checkInRange(dist_right, DIST_CUTOFF));
-
-  Serial.printf("Left: %3dcm      Right: %3dcm\n", dist_left, dist_right);
-  ///
+  if (debug) Serial.printf("Right: %3dcm \n", dist_right);
+  right_stop = checkInRange(dist_right, dist_cutoff);
+  if (left_stop) {
+    checkAndSendNetworkBroadcast("stop");
+  } else {
+    checkAndSendNetworkBroadcast((right_stop ? "stop" : "clear"));
+  }
 }
 
-String checkInRange(int dist, int cutoff) {
-  if (dist == 0) return "clear";
-  return (dist < cutoff) ? "stop" : "clear";
+bool checkInRange(int dist, int cutoff) {
+  if (dist == 0) return false;
+  return (dist < cutoff) ? true : false;
 }
 
 void checkAndSendNetworkBroadcast(String new_state) {
-  if (new_state != state) network.sendBroadcast(new_state);
-  else if (millis() - timer() < (1000.0 / NETWORK_RATE)) network.sendBroadcast(new_state);
-  network.update();
+  if (new_state != state) {
+    network.sendBroadcast(new_state);
+    timer_rst();
+    if (debug) Serial.printf("Update send: %s\n", new_state);
+  } else if (millis() - timer() > (1000.0 / NETWORK_RATE)) {
+    network.sendBroadcast(new_state);
+    timer_rst();
+    if (debug) Serial.printf("Timed send: %s\n", new_state);
+  }
   state = new_state;
 }
 
 int timer() {
-  if (millis() < timer) timer = millis() + (sizeof(unsigned long) - timer);
-  return timer;
+  if (millis() < t) t = millis() + (sizeof(unsigned long) - t);
+  return t;
+}
+
+void timer_rst() {
+  t = millis();
 }
 
 //Callbacks
