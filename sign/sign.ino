@@ -2,7 +2,15 @@
 #include <Adafruit_NeoPixel.h>
 #include "images.cpp"
 #include "colors.h"
+#include "painlessMesh.h"
 
+///
+#define   MESH_PREFIX     "GarageBat"
+#define   MESH_PASSWORD   "garagePassword"
+#define   MESH_PORT       5555
+painlessMesh network;
+Scheduler signScheduler; // tasks control
+///
 
 // defined in images.cpp #define NUM_PIXELS 125     // The number of LEDs (pixels) on NeoPixel LED strip
 #define PIN_NEO_PIXEL 16  // The ESP32 pin GPIO16 connected to NeoPixel
@@ -14,7 +22,7 @@
 #define PWM1_Freq  1000
 
 bool debug = true;
-bool serialControl = true;
+bool serialControl = false;
 
 Adafruit_NeoPixel NeoPixel(NUM_PIXELS, PIN_NEO_PIXEL, NEO_GRB + NEO_KHZ800);
 
@@ -33,7 +41,7 @@ double sensorAngle = 0;
 int longPressTime = 500;     //how long a long press is
 int debounce = 40;    //how long a button has to be read before it counts as a press
 int pressType = 0;
-int tone = 150;   //beep sound
+int beep_tone = 150;   // sound
 int beeping = 0;    //which beep is currently happening
 int page = 0;     //which page of the menu we are on
 bool update = false;    //screen has an update to run
@@ -61,21 +69,25 @@ bool signState = false;   //state of LEDs - false is off
 
 void beep(int _type, long int &_startTimeBeep, int &_beeping, int _tone, int _page) {
   if (_type == 1 && _beeping == 0 && _page != 0 && _page != 3) {  //short beep
-    ledcWrite(PWM1_Ch, _tone);
+    // ledcWrite(PWM1_Ch, _tone);
+    analogWrite(PIN_BUZZER_1, _tone);
     _beeping = _type;
     _startTimeBeep = millis();
   } else if (_type == 2 && _beeping == 0) {   //long beep
-    ledcWrite(PWM1_Ch, _tone);
+    // ledcWrite(PWM1_Ch, _tone);
+    analogWrite(PIN_BUZZER_1, _tone);
     _beeping = _type;
     _startTimeBeep = millis();
   }
 
   if (_beeping == 1 && millis() - _startTimeBeep > 50) {
-    ledcWrite(PWM1_Ch, 0);
+    // ledcWrite(PWM1_Ch, 0);
+    analogWrite(PIN_BUZZER_1, 0);
     _beeping = 0;
     _startTimeBeep = 0;
   } else if (_beeping == 2 && millis() - _startTimeBeep > 150) {
-    ledcWrite(PWM1_Ch, 0);
+    // ledcWrite(PWM1_Ch, 0);
+    analogWrite(PIN_BUZZER_1, 0);
     _beeping = 0;
     _startTimeBeep = 0;
   }
@@ -543,13 +555,23 @@ void led_flash(int _count, int _firstImageTime, int _secondImageTime, int _preDe
 
 
 void setup() {
+  ///
+  network.setDebugMsgTypes( ERROR | STARTUP );  
+  network.init( MESH_PREFIX, MESH_PASSWORD, &signScheduler, MESH_PORT );    //start network with name, password, task controller, on port number
+  network.onReceive(&receivedCallback);   //runs every time a message is received
+  network.onNewConnection(&newConnectionCallback);    //runs when a device joins
+  network.onChangedConnections(&changedConnectionCallback);   //runs when connections change
+  network.onNodeTimeAdjusted(&nodeTimeAdjustedCallback);  //runs when device updates it's time to match the network
+  ///
+
   NeoPixel.begin();  // initialize NeoPixel strip object (REQUIRED)
   pinMode(PIN_BUTTON, INPUT_PULLUP);
   // pinMode(PIN_BUZZER_1, OUTPUT);
   // pinMode(PIN_BUZZER_2, OUTPUT);
 
-  ledcAttachPin(PIN_BUZZER_1, PWM1_Ch);
-  ledcSetup(PWM1_Ch, PWM1_Freq, PWM1_Res);
+  // ledcAttachPin(PIN_BUZZER_1, PWM1_Ch);
+  // ledcSetup(PWM1_Ch, PWM1_Freq, PWM1_Res);
+  pinMode(PIN_BUZZER_1, OUTPUT);
 
   if (debug || serialControl) Serial.begin(9600);
   Serial.setTimeout(10);
@@ -605,10 +627,12 @@ void loop() {
   // NeoPixel.show();  // update to the NeoPixel Led Strip
   // delay(250);     
 
+  network.update();
+
   pressType = checkButton(startTimeButton, longPressTime, debounce, buttonState, longPressed);
 
   menu(pressType, hOffset, entranceAngle, sensorAngle, page, update);
-  beep(pressType, startTimeBeep, beeping, tone, page);
+  beep(pressType, startTimeBeep, beeping, beep_tone, page);
 
   if(update) {
     switch (page) {
@@ -724,4 +748,37 @@ void loop() {
 //   led_display(height_image, 125);
 
 //   delay(1000);
+}
+
+//Callbacks
+//##############################################################
+//This is where you act on a message that is received
+void receivedCallback( uint32_t from, String &msg ) {   //when a message directed to this device is received | from is the sender ID, msg is the message as a String 
+    if (msg == "stop") {
+        Serial.println("stop received from sensor at " + String(millis()));
+        rf = true;
+        network.sendBroadcast("stop received");
+        //Serial.println(millis());
+
+        //start doing led and sign things
+        //could create it as a task and then just enable and disable it
+    } else if (msg == "clear") {
+        Serial.println("clear message received at " + String(millis()));
+        rf = false;
+        //stop doing led things
+        //stop the do led and sign things task
+    }
+}
+//###############################################################
+
+void newConnectionCallback(uint32_t _nodeID) {
+    
+}
+
+void changedConnectionCallback() {
+
+}
+
+void nodeTimeAdjustedCallback(int32_t offset) {
+    if (debug) Serial.printf("time adjusted: %u. new offset = %d\n", network.getNodeTime(),offset);
 }

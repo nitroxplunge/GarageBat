@@ -9,7 +9,7 @@
 #define DELAY_INTERLACE 25     // Delay time between switching between sensors
 #define DELAY_TRIG      10     // Trigger pulse duration
 
-#define NETWORK_RATE 10
+#define NETWORK_RATE 1
 
 ///
 #define   MESH_PREFIX     "GarageBat"

@@ -145,7 +145,6 @@ void loop() {
     signState = true;
     led_display(stop_image, 125, red, red);
     NeoPixel.show();  // update to the NeoPixel Led Strip
-    delay(4000);
   } else if (!rf && signState) {  //rf wants off, and sign is on
     signState = false;
     NeoPixel.clear();  // set all pixel colors to 'off'. It only takes effect if pixels.show() is called
