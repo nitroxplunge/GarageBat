@@ -59,12 +59,12 @@ bool signState = false;   //state of LEDs - false is off
 
 
 
-void beep(int _type, long int &_startTimeBeep, int &_beeping, int _tone) {
-  if (_type == 1 && _beeping == 0) {  //short beep
+void beep(int _type, long int &_startTimeBeep, int &_beeping, int _tone, int _page) {
+  if (_type == 1 && _beeping == 0 && _page != 0 && _page != 3) {  //short beep
     ledcWrite(PWM1_Ch, _tone);
     _beeping = _type;
     _startTimeBeep = millis();
-  } else if (_type == 2 && _beeping == 0) {
+  } else if (_type == 2 && _beeping == 0) {   //long beep
     ledcWrite(PWM1_Ch, _tone);
     _beeping = _type;
     _startTimeBeep = millis();
@@ -608,7 +608,7 @@ void loop() {
   pressType = checkButton(startTimeButton, longPressTime, debounce, buttonState, longPressed);
 
   menu(pressType, hOffset, entranceAngle, sensorAngle, page, update);
-  if (page == 1 || page == 2) beep(pressType, startTimeBeep, beeping, tone);
+  beep(pressType, startTimeBeep, beeping, tone, page);
 
   if(update) {
     switch (page) {
@@ -658,7 +658,6 @@ void loop() {
 //basic LED RF control
   if (rf && !signState) {   //rf wants on, and sign is off
     signState = true;
-    page = 0;
     led_display(stop_image, 5, 25);
     //led_display(image, 5, 25, purple, blue);
     NeoPixel.show();  // update to the NeoPixel Led Strip
